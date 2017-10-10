@@ -1,19 +1,24 @@
-package com.gh0u1l5.wechatmagician.xposed
+package com.gh0u1l5.wechatmagician.storage
 
 import de.robv.android.xposed.XposedBridge.log
 import de.robv.android.xposed.XposedHelpers.callMethod
 import java.math.BigInteger
 
-
 // SnsCache records the timeline objects browsed by the user.
 object SnsCache {
 
-    data class SnsMedia(
+    data class SnsMediaURL(
             val url: String?,
-            val type: String?,
+            val md5: String?,
             val idx: String?,
             val key: String?,
             val token: String?
+    )
+
+    data class SnsMedia(
+            val type: String?,
+            val main: SnsMediaURL?,
+            val thumb: SnsMediaURL?
     )
 
     class SnsInfo(raw: MutableMap<String, String?>) {
@@ -21,6 +26,19 @@ object SnsCache {
 
         val content = raw[".TimelineObject.contentDesc"]
         val medias = parseMedias(raw)
+
+        private fun parseMediaURL(key: String, raw: MutableMap<String, String?>): SnsMediaURL? {
+            if (!raw.containsKey("$mediaListKey.$key")) {
+                return null
+            }
+            return SnsMediaURL(
+                    url   = raw["$mediaListKey.$key"],
+                    md5   = raw["$mediaListKey.$key.\$md5"],
+                    idx   = raw["$mediaListKey.$key.\$enc_idx"],
+                    key   = raw["$mediaListKey.$key.\$key"],
+                    token = raw["$mediaListKey.$key.\$token"]
+            )
+        }
 
         private fun parseMedia(key: String, raw: MutableMap<String, String?>): SnsMedia? {
             if (key == "media0") {
@@ -30,11 +48,9 @@ object SnsCache {
                 return null
             }
             return SnsMedia(
-                    url   = raw["$mediaListKey.$key.url"],
-                    type  = raw["$mediaListKey.$key.url.\$type"],
-                    idx   = raw["$mediaListKey.$key.url.\$enc_idx"],
-                    key   = raw["$mediaListKey.$key.url.\$key"],
-                    token = raw["$mediaListKey.$key.url.\$token"]
+                    type  = raw["$mediaListKey.$key.type"],
+                    main  = parseMediaURL("$key.url", raw),
+                    thumb = parseMediaURL("$key.thumb", raw)
             )
         }
 
@@ -43,9 +59,8 @@ object SnsCache {
                 return listOf()
             }
             val result = mutableListOf<SnsMedia>()
-            for (i in 0 until 1000) {
-                val media = parseMedia("media$i", raw) ?: break
-                result += media
+            for (i in 0 until 9) {
+                result += parseMedia("media$i", raw) ?: break
             }
             return result.toList()
         }
@@ -79,21 +94,21 @@ object SnsCache {
             log("DB => Unexpected count $count for rowId $rowId in table SnsInfo")
             return null
         }
-        callMethod(cursor, "moveToNext")
+        callMethod(cursor, "moveToFirst")
         val snsId = callMethod(cursor, "getLong", 0)
         callMethod(cursor, "close")
         return toDecimalString(snsId as Long)
     }
 
     // snsTable maps snsId to SNS object.
-    private var snsTable: Map<String, SnsInfo> = mapOf()
+    private var snsTable: MutableMap<String, SnsInfo> = mutableMapOf()
 
     @Synchronized operator fun get(snsId: String?): SnsInfo? {
         return snsTable[snsId]
     }
 
     @Synchronized operator fun set(snsId: String, record: SnsInfo) {
-        snsTable += Pair(snsId, record)
+        snsTable[snsId] = record
     }
 
     @Synchronized operator fun contains(snsId: String): Boolean {

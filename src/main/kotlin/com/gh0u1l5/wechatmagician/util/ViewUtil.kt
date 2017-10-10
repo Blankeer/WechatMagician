@@ -1,11 +1,15 @@
 package com.gh0u1l5.wechatmagician.util
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
-object UIUtil {
+// ViewUtil is a helper object for debugging / handling UI operations.
+object ViewUtil {
     // dumpViewGroup dumps the structure of a view group.
     fun dumpViewGroup(prefix: String, viewGroup: ViewGroup) {
         repeat(viewGroup.childCount, {
@@ -43,5 +47,15 @@ object UIUtil {
             }
         })
         return null
+    }
+
+    // drawView draws the content of a view to a bitmap.
+    fun drawView(view: View): Bitmap {
+        val width = view.width
+        val height = view.height
+        val b = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        b.eraseColor(Color.WHITE)
+        view.draw(Canvas(b))
+        return b
     }
 }

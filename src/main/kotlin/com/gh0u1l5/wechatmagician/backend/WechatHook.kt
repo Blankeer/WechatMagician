@@ -1,41 +1,35 @@
-package com.gh0u1l5.wechatmagician.xposed
+package com.gh0u1l5.wechatmagician.backend
 
 import android.app.Activity
 import android.content.ContentValues
 import android.content.Intent
-import android.content.res.XModuleResources
-import android.os.Environment
-import android.view.Gravity
+import android.os.Bundle
 import android.view.Menu
+import android.view.MenuItem
 import android.widget.FrameLayout
-import android.widget.PopupMenu
-import android.widget.Toast
-import com.gh0u1l5.wechatmagician.ForwardAsyncTask
-import com.gh0u1l5.wechatmagician.util.C
+import com.gh0u1l5.wechatmagician.C
+import com.gh0u1l5.wechatmagician.storage.HookStatus
+import com.gh0u1l5.wechatmagician.storage.MessageCache
+import com.gh0u1l5.wechatmagician.storage.LocalizedResources
+import com.gh0u1l5.wechatmagician.storage.SnsCache
 import com.gh0u1l5.wechatmagician.util.ImageUtil
 import com.gh0u1l5.wechatmagician.util.MessageUtil
+import com.gh0u1l5.wechatmagician.util.MessageUtil.bundleToString
 import com.gh0u1l5.wechatmagician.util.PackageUtil.shadowCopy
 import de.robv.android.xposed.*
 import de.robv.android.xposed.XposedBridge.*
 import de.robv.android.xposed.XposedHelpers.*
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.*
-import java.text.SimpleDateFormat
-import java.util.*
-import com.gh0u1l5.wechatmagician.util.UIUtil.searchViewGroup
-
+import kotlin.concurrent.thread
 
 // WechatHook contains the entry points and all the hooks.
-class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
+class WechatHook : IXposedHookLoadPackage {
 
     private val pkg = WechatPackage
-    private val res = ModuleResources
+    private val res = LocalizedResources
+    private val listeners = WechatListeners
     private lateinit var loader: ClassLoader
-
-    // Hook for initializing localized resources.
-    override fun initZygote(param: IXposedHookZygoteInit.StartupParam?) {
-        ModuleResources.init(XModuleResources.createInstance(param?.modulePath, null))
-    }
 
     // Hook for hacking Wechat application.
     // NOTE: Remember to catch all the exceptions here, otherwise you may get boot loop.
@@ -45,22 +39,35 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
         }
 
         try {
-            WechatPackage.init(param)
+            pkg.init(param)
             loader = param.classLoader
+            val process = param.processName
+            if (process == "com.tencent.mm") {
+                thread(start = true) {
+                    pkg.dumpPackage()
+                }
+            }
         } catch (e: Throwable) {
             log("INIT => ${e.message}")
             return
         }
 
-//        tryHook(this::hookUIEvents, {})
+        // Hooks for Debug
+//        tryHook(this::hookTouchEvents, {})
+//        tryHook(this::hookCreateActivity, {})
+//        tryHook(this::hookXLogSetup, {
+//            pkg.XLogSetup = null
+//        })
 
-        tryHook(this::hookOptionsMenu, {
-            pkg.MMActivity = null
-        })
-
-        tryHook(this::hookSnsItemUI, {
+        // Hooks for SNS
+        tryHook(this::hookSnsItemLongPress, {
             pkg.AdFrameLayout = null
         })
+        tryHook(this::hookSnsUploadUI, {
+            pkg.SnsUploadUI = null
+        })
+
+        // Hooks for Selecting
         tryHook(this::hookAlbumPreviewUI, {
             pkg.AlbumPreviewUI = null
         })
@@ -71,6 +78,7 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
             pkg.SelectConversationUI = null
         })
 
+        // Hooks for Storage / XML / Database
         tryHook(this::hookMsgStorage, {
             pkg.MsgStorageClass = null
         })
@@ -89,30 +97,8 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
         try { hook() } catch (e: Throwable) { log("HOOK => $e"); cleanup(e) }
     }
 
-    private fun hookUIEvents() {
-        // Hook Activity.startActivity to trace source activities.
-        findAndHookMethod("android.app.Activity", loader, "startActivity", C.Intent, object : XC_MethodHook() {
-            @Throws(Throwable::class)
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val obj = param.thisObject
-                val intent = param.args[0] as Intent?
-                val extras = intent?.extras
-                log("Activity.startActivity => ${obj.javaClass}, intent => ${extras?.keySet()?.map{"$it = ${extras[it]}"}}")
-            }
-        })
-
-        // Hook Activity.onCreate to trace target activities.
-        findAndHookMethod(pkg.MMFragmentActivity, "onCreate", C.Bundle, object : XC_MethodHook() {
-            @Throws(Throwable::class)
-            override fun afterHookedMethod(param: MethodHookParam) {
-                val obj = param.thisObject
-                val intent = callMethod(obj, "getIntent") as Intent?
-                val extras = intent?.extras
-                log("Activity.onCreate => ${obj.javaClass}, intent => ${extras?.keySet()?.map{"$it = ${extras[it]}"}}")
-            }
-        })
-
-        // Hook View.onTouchEvent to help analyze UI objects.
+    private fun hookTouchEvents() {
+        // Hook View.onTouchEvent to help analyze UI layouts.
         findAndHookMethod("android.view.View", loader, "onTouchEvent", C.MotionEvent, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun beforeHookedMethod(param: MethodHookParam) {
@@ -121,6 +107,39 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
             }
         })
 
+        HookStatus += "TouchEvents"
+    }
+
+    private fun hookCreateActivity() {
+        // Hook Activity.startActivity to trace source activities.
+        findAndHookMethod("android.app.Activity", loader, "startActivity", C.Intent, object : XC_MethodHook() {
+            @Throws(Throwable::class)
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val obj = param.thisObject
+                val intent = param.args[0] as Intent?
+                log("Activity.startActivity => ${obj.javaClass}, intent => ${bundleToString(intent?.extras)}")
+            }
+        })
+
+        // Hook Activity.onCreate to trace target activities.
+        findAndHookMethod("android.app.Activity", loader, "onCreate", C.Bundle, object : XC_MethodHook() {
+            @Throws(Throwable::class)
+            override fun afterHookedMethod(param: MethodHookParam) {
+                val obj = param.thisObject
+                val bundle = param.args[0] as Bundle?
+                val intent = callMethod(obj, "getIntent") as Intent?
+                log("Activity.onCreate => ${obj.javaClass}, intent => ${bundleToString(intent?.extras)}, bundle => ${bundleToString(bundle)}")
+            }
+        })
+
+        HookStatus += "CreateActivity"
+    }
+
+    private fun hookXLogSetup() {
+        if (pkg.XLogSetup == null) {
+            return
+        }
+
         // Hook XLog to print internal errors into logcat.
         XposedBridge.hookAllMethods(pkg.XLogSetup, "keep_setupXLog", object : XC_MethodHook() {
             @Throws(Throwable::class)
@@ -128,79 +147,57 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
                 param.args[5] = true // enable logcat output
             }
         })
+
+        HookStatus += "XLogSetup"
     }
 
-    private fun hookOptionsMenu() {
-        if (pkg.MMActivity == null) {
-            return
-        }
-
-        // Hook onCreateOptionsMenu to add new buttons in the OptionsMenu.
-        findAndHookMethod(pkg.MMActivity, "onCreateOptionsMenu", C.Menu, object : XC_MethodHook() {
-            @Throws(Throwable::class)
-            override fun afterHookedMethod(param: MethodHookParam) {
-                val menu = param.args[0] as Menu? ?: return
-                val button = WechatButtons[param.thisObject.javaClass.name] ?: return
-
-                val item = menu.add(button.groupId, button.itemId, button.order, button.title)
-                button.decorate(item, param.thisObject)
-                val listener = button.listener(param.thisObject)
-                item.setOnMenuItemClickListener(listener)
-            }
-        })
-    }
-
-    private fun hookSnsItemUI() {
+    private fun hookSnsItemLongPress() {
         if (pkg.AdFrameLayout == null) {
             return
         }
 
+        // Hook AdFrameLayout constructors to add onLongClickListeners.
         findAndHookConstructor(pkg.AdFrameLayout, C.Context, C.AttributeSet, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun afterHookedMethod(param: MethodHookParam) {
-                val formatter = SimpleDateFormat("yyyy-MM-dd-HHmmss", Locale.getDefault())
+                val layout = param.thisObject as FrameLayout
+                layout.isLongClickable = true
+                layout.setOnLongClickListener { false }
+            }
+        })
 
-                val layout = param.thisObject as FrameLayout?
-                layout?.isLongClickable = true
-                layout?.setOnLongClickListener {
-                    val storage = Environment.getExternalStorageDirectory().path + "/WechatMagician"
-                    val popup = PopupMenu(layout.context, layout, Gravity.CENTER)
-                    popup.menu.add(0, 1, 0, res.menuSnsForward)
-                    popup.menu.add(0, 2, 0, res.menuSnsScreenshot)
-                    popup.setOnMenuItemClickListener listener@ { item ->
-                        when (item.itemId) {
-                            1 -> {
-                                if (pkg.PLTextView == null) {
-                                    return@listener false
-                                }
-                                val textView = searchViewGroup(layout, pkg.PLTextView!!.name)
-                                val rowId = textView?.tag as String?
-                                val snsId = SnsCache.getSnsId(rowId?.drop("sns_table_".length))
-                                val snsInfo = SnsCache[snsId] ?: return@listener false
-                                ForwardAsyncTask(snsInfo, layout.context).execute()
-                                Toast.makeText(
-                                        layout.context, res.promptWait, Toast.LENGTH_SHORT
-                                ).show()
-                                return@listener true
-                            }
-                            2 -> {
-                                val time = Calendar.getInstance().time
-                                val filename = "SNS-${formatter.format(time)}.jpg"
-                                val path = "$storage/screenshot/$filename"
-                                val bitmap = ImageUtil.drawView(layout)
-                                ImageUtil.writeBitmapToDisk(path, bitmap)
-                                Toast.makeText(
-                                        layout.context, res.promptScreenShot + path, Toast.LENGTH_SHORT
-                                ).show()
-                                return@listener true
-                            }
-                            else -> false
-                        }
-                    }
-                    popup.show(); true
+        // Hook AdFrameLayout.setOnLongClickListener to prevent someone else from overwriting the listener.
+        findAndHookMethod("android.view.View", loader, "setOnLongClickListener", C.ViewOnLongClickListener, object : XC_MethodHook() {
+            @Throws(Throwable::class)
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (param.thisObject.javaClass == pkg.AdFrameLayout) {
+                    param.args[0] = listeners.onAdFrameLongClickListener(param.thisObject)
                 }
             }
         })
+
+        HookStatus += "SnsItemLongPress"
+    }
+
+    private fun hookSnsUploadUI() {
+        if (pkg.SnsUploadUI == null || pkg.SnsUploadUIEditTextField == "") {
+            return
+        }
+
+        // Hook SnsUploadUI.onPause to destroy the activity properly when forwarding moments.
+        findAndHookMethod(pkg.SnsUploadUI, "onPause", object : XC_MethodHook() {
+            @Throws(Throwable::class)
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val obj = param.thisObject
+                val intent = callMethod(obj, "getIntent") as Intent?
+                if (intent?.extras?.getBoolean("Ksnsforward") == true) {
+                    val editText = getObjectField(obj, pkg.SnsUploadUIEditTextField)
+                    callMethod(editText, "setText", "")
+                }
+            }
+        })
+
+        HookStatus += "SnsUploadUI"
     }
 
     private fun hookAlbumPreviewUI() {
@@ -220,12 +217,39 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
                 }
             }
         })
+
+        HookStatus += "AlbumPreviewUI"
     }
 
     private fun hookSelectContactUI() {
-        if (pkg.SelectContactUI == null) {
+        if (pkg.MMActivity == null || pkg.SelectContactUI == null) {
             return
         }
+
+        // Hook MMActivity.onCreateOptionsMenu to add "Select All" button.
+        findAndHookMethod(pkg.MMActivity, "onCreateOptionsMenu", C.Menu, object : XC_MethodHook() {
+            @Throws(Throwable::class)
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (param.thisObject.javaClass != pkg.SelectContactUI) {
+                    return
+                }
+
+                val menu = param.args[0] as Menu? ?: return
+                val menuItem = menu.add(0, 2, 0, res["button_select_all"])
+
+                val intent = (param.thisObject as Activity).intent
+                menuItem.isChecked = intent.getBooleanExtra("select_all_checked", false)
+                if (menuItem.isChecked) {
+                    menuItem.title = res["button_select_all"] + "  \u2611"
+                } else {
+                    menuItem.title = res["button_select_all"] + "  \u2610"
+                }
+                menuItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                menuItem.setOnMenuItemClickListener(
+                        listeners.onSelectContactUISelectAllListener(param.thisObject)
+                )
+            }
+        })
 
         // Hook SelectContactUI to help the "Select All" button.
         findAndHookMethod(pkg.SelectContactUI, "onActivityResult", C.Int, C.Int, C.Intent, object : XC_MethodHook() {
@@ -255,6 +279,8 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
                 }
             }
         })
+
+        HookStatus += "SelectContactUI"
     }
 
     private fun hookSelectConversationUI() {
@@ -269,6 +295,8 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
                 param.result = false
             }
         })
+
+        HookStatus += "SelectConversationUI"
     }
 
     private fun hookMsgStorage() {
@@ -276,7 +304,7 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
             return
         }
 
-        // Analyze dynamically to find the global message storage instance
+        // Analyze dynamically to find the global message storage instance.
         hookAllConstructors(pkg.MsgStorageClass, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun afterHookedMethod(param: MethodHookParam) {
@@ -290,11 +318,15 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
         findAndHookMethod(pkg.MsgStorageClass, pkg.MsgStorageInsertMethod, pkg.MsgInfoClass, C.Boolean, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun afterHookedMethod(param: MethodHookParam) {
-                val msg = param.args[0]
-                val msgId = getLongField(msg, "field_msgId")
-                MessageCache[msgId] = msg
+                thread(start = true) {
+                    val msg = param.args[0]
+                    val msgId = getLongField(msg, "field_msgId")
+                    MessageCache[msgId] = msg
+                }
             }
         })
+
+        HookStatus += "MsgStorage"
     }
 
     private fun hookImgStorage() {
@@ -302,7 +334,7 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
             return
         }
 
-        // Analyze dynamically to find the global image storage instance
+        // Analyze dynamically to find the global image storage instance.
         hookAllConstructors(pkg.ImgStorageClass, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun afterHookedMethod(param: MethodHookParam) {
@@ -322,7 +354,7 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
 //            }
 //        })
 
-        // Hook FileOutputStream to prevent Wechat from overwriting disk cache
+        // Hook FileOutputStream to prevent Wechat from overwriting disk cache.
         findAndHookConstructor("java.io.FileOutputStream", loader, C.File, C.Boolean, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun beforeHookedMethod(param: MethodHookParam) {
@@ -332,6 +364,8 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
                 }
             }
         })
+
+        HookStatus += "ImgStorage"
     }
 
     private fun hookXMLParse() {
@@ -339,7 +373,7 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
             return
         }
 
-        // Hook XML Parser for the status bar easter egg
+        // Hook XML Parser for the status bar easter egg.
         findAndHookMethod(pkg.XMLParserClass, pkg.XMLParseMethod, C.String, C.String, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun afterHookedMethod(param: MethodHookParam) {
@@ -355,16 +389,20 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
                     if (!msg.startsWith("\"")) {
                         return
                     }
-                    result[msgTag] = MessageUtil.applyEasterEgg(msg, res.labelEasterEgg)
+                    result[msgTag] = MessageUtil.applyEasterEgg(msg, res["label_easter_egg"])
                 }
                 if (result[".TimelineObject"] != null) {
-                    val id = result[".TimelineObject.id"]
-                    if (id != null) {
-                        SnsCache[id] = SnsCache.SnsInfo(result)
+                    thread(start = true) {
+                        val id = result[".TimelineObject.id"]
+                        if (id != null) {
+                            SnsCache[id] = SnsCache.SnsInfo(result)
+                        }
                     }
                 }
             }
         })
+
+        HookStatus += "XMLParse"
     }
 
     private fun hookDatabase() {
@@ -372,16 +410,23 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
             return
         }
 
-        // Hook SQLiteDatabase constructors to capture the database instance for SNS.
-        hookAllConstructors(pkg.SQLiteDatabaseClass, object : XC_MethodHook() {
+        val typeSQLiteCipherSpec = findClass("com.tencent.wcdb.database.SQLiteCipherSpec", loader)
+        val typeCursorFactory = findClass("com.tencent.wcdb.database.SQLiteDatabase.CursorFactory", loader)
+        val typeDatabaseErrorHandler = findClass("com.tencent.wcdb.DatabaseErrorHandler", loader)
+        // Hook SQLiteDatabase.openDatabase to capture the database instance for SNS.
+        findAndHookMethod(pkg.SQLiteDatabaseClass, "openDatabase", C.String, C.ByteArray, typeSQLiteCipherSpec, typeCursorFactory, C.Int, typeDatabaseErrorHandler, C.Int, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun afterHookedMethod(param: MethodHookParam) {
-                val path = param.thisObject.toString()
-                if (!path.endsWith("SnsMicroMsg.db")) {
+                val path = param.args[0] as String?
+                if (path?.endsWith("SnsMicroMsg.db") != true) {
                     return
                 }
-                if (SnsCache.snsDB !== param.thisObject) {
-                    SnsCache.snsDB = param.thisObject
+                if (SnsCache.snsDB !== param.result) {
+                    SnsCache.snsDB = param.result
+                    // Force Wechat to retrieve existing SNS data online.
+                    callMethod(SnsCache.snsDB, "delete",
+                            "snsExtInfo3", "local_flag=0", null
+                    )
                 }
             }
         })
@@ -395,7 +440,7 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
 //            }
 //        })
 
-        // Hook SQLiteDatabase.update to prevent Wechat from recalling messages or deleting moments
+        // Hook SQLiteDatabase.update to prevent Wechat from recalling messages or deleting moments.
         findAndHookMethod(pkg.SQLiteDatabaseClass, "updateWithOnConflict", C.String, C.ContentValues, C.String, C.StringArray, C.Int, object : XC_MethodHook() {
             @Throws(Throwable::class)
             override fun beforeHookedMethod(param: MethodHookParam) {
@@ -413,22 +458,13 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
                         if (!values.getAsString("content").startsWith("\"")) {
                             return
                         }
-
-                        val msgId = values["msgId"] as Long
-                        val msg = MessageCache[msgId] ?: return
-
-                        val copy = msg.javaClass.newInstance()
-                        shadowCopy(msg, copy)
-
-                        val createTime = getLongField(msg, "field_createTime")
-                        setIntField(copy, "field_type", values["type"] as Int)
-                        setObjectField(copy, "field_content", values["content"])
-                        setLongField(copy, "field_createTime", createTime + 1L)
-
-                        callMethod(pkg.MsgStorageObject, pkg.MsgStorageInsertMethod, copy, false)
+                        handleMessageRecall(values)
                         param.result = 1
                     }
                     "SnsInfo" -> { // delete moment
+                        if (values["type"] !in listOf(1, 2, 3, 15)) {
+                            return
+                        }
                         if (values["sourceType"] != 0) {
                             return
                         }
@@ -449,7 +485,6 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
             }
         })
 
-//        val typeCursorFactory = findClass("com.tencent.wcdb.database.SQLiteDatabase.CursorFactory", loader)
 //        val typeCancellationSignal = findClass("com.tencent.wcdb.support.CancellationSignal", loader)
 //        findAndHookMethod(pkg.SQLiteDatabaseClass, "rawQueryWithFactory", typeCursorFactory, C.String, C.StringArray, C.String, typeCancellationSignal, object : XC_MethodHook() {
 //            @Throws(Throwable::class)
@@ -478,22 +513,33 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
 //                log("DB => executeSql sql = $sql, bindArgs = ${MessageUtil.argsToString(bindArgs)}")
 //            }
 //        })
+
+        HookStatus += "Database"
     }
 
-    // handleImageRecall notifies user that someone has recalled an image.
-    private fun handleImageRecall(origin: Any, values: ContentValues) {
-        if (getIntField(origin, "field_type") != 3) {
+    // handleMessageRecall notifies user that someone has recalled the given message.
+    private fun handleMessageRecall(values: ContentValues) {
+        if (pkg.MsgStorageObject == null || pkg.MsgStorageInsertMethod == "") {
             return
         }
-        values.remove("type")
-        values.remove("content")
-        val imgPath = getObjectField(origin, "field_imgPath")
-        ImageUtil.replaceThumbnail(imgPath as String, res.bitmapRecalled)
+
+        val msgId = values["msgId"] as Long
+        val msg = MessageCache[msgId] ?: return
+
+        val copy = msg.javaClass.newInstance()
+        shadowCopy(msg, copy)
+
+        val createTime = getLongField(msg, "field_createTime")
+        setIntField(copy, "field_type", values["type"] as Int)
+        setObjectField(copy, "field_content", values["content"])
+        setLongField(copy, "field_createTime", createTime + 1L)
+
+        callMethod(pkg.MsgStorageObject, pkg.MsgStorageInsertMethod, copy, false)
     }
 
     // handleMomentDelete notifies user that someone has deleted the given moment.
     private fun handleMomentDelete(content: ByteArray?, values: ContentValues) {
-        MessageUtil.notifyInfoDelete(res.labelDeleted, content)?.let { msg ->
+        MessageUtil.notifyInfoDelete(res["label_deleted"], content)?.let { msg ->
             values.remove("sourceType")
             values.put("content", msg)
         }
@@ -501,7 +547,7 @@ class WechatHook : IXposedHookZygoteInit, IXposedHookLoadPackage {
 
     // handleCommentDelete notifies user that someone has deleted the given comment in moments.
     private fun handleCommentDelete(curActionBuf: ByteArray?, values: ContentValues) {
-        MessageUtil.notifyCommentDelete(res.labelDeleted, curActionBuf)?.let { msg ->
+        MessageUtil.notifyCommentDelete(res["label_deleted"], curActionBuf)?.let { msg ->
             values.remove("commentflag")
             values.put("curActionBuf", msg)
         }

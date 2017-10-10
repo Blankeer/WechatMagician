@@ -1,13 +1,14 @@
-package com.gh0u1l5.wechatmagician.xposed
+@file:Suppress("MemberVisibilityCanPrivate")
 
-import com.gh0u1l5.wechatmagician.util.C
+package com.gh0u1l5.wechatmagician.backend
+
+import com.gh0u1l5.wechatmagician.C
+import com.gh0u1l5.wechatmagician.Version
+import com.gh0u1l5.wechatmagician.util.PackageUtil.findClassIfExists
 import com.gh0u1l5.wechatmagician.util.PackageUtil.findClassesFromPackage
-import com.gh0u1l5.wechatmagician.util.PackageUtil.findClassesWithSuper
-import com.gh0u1l5.wechatmagician.util.PackageUtil.findFieldsWithGenericType
-import com.gh0u1l5.wechatmagician.util.PackageUtil.findFirstClassWithField
-import com.gh0u1l5.wechatmagician.util.PackageUtil.findFirstClassWithMethod
-import com.gh0u1l5.wechatmagician.util.Version
-import de.robv.android.xposed.XposedHelpers.*
+import com.gh0u1l5.wechatmagician.util.PackageUtil.findFieldsWithType
+import com.gh0u1l5.wechatmagician.util.PackageUtil.findMethodsByExactParameters
+import de.robv.android.xposed.XposedBridge.log
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import net.dongliu.apk.parser.ApkFile
 import net.dongliu.apk.parser.bean.DexClass
@@ -27,6 +28,7 @@ object WechatPackage {
     var PLTextView: Class<*>? = null
 
     var SnsUploadUI: Class<*>? = null
+    var SnsUploadUIEditTextField = ""
     var AdFrameLayout: Class<*>? = null
     var SnsPostTextView: Class<*>? = null
     var SnsPhotosContent: Class<*>? = null
@@ -77,13 +79,14 @@ object WechatPackage {
                 findClassIfExists("com.tencent.mmdb.database.SQLiteDatabase", loader)
             else -> null
         }
-        EncEngine = findFirstClassWithMethod(
-                findClassesFromPackage(loader, classes, "com.tencent.mm.modelsfs"),
-                null, "seek", C.Long
-        )
+
+        EncEngine = findClassesFromPackage(loader, classes, "com.tencent.mm.modelsfs")
+                .filterByMethod(null, "seek", C.Long)
+                .filterByMethod(null, "free")
+                .firstOrNull("EncEngine")
         EncEngineEDMethod = findMethodsByExactParameters(
                 EncEngine, C.Int, C.ByteArray, C.Int
-        ).firstOrNull()?.name ?: "" // NOTE: ED method may have duplicated entries.
+        ).firstOrNull()?.name ?: ""
 
         val pkgUI = "com.tencent.mm.ui"
         MMActivity = findClassIfExists("$pkgUI.MMActivity", loader)
@@ -92,13 +95,13 @@ object WechatPackage {
         PLTextView = findClassIfExists("com.tencent.mm.kiss.widget.textview.PLSysTextView", loader)
 
         val pkgSnsUI = "com.tencent.mm.plugin.sns.ui"
-        val snsUIClasses = findClassesFromPackage(loader, classes, pkgSnsUI)
-        if (MMActivity != null) {
-            SnsUploadUI = findFirstClassWithField(
-                    findClassesWithSuper(snsUIClasses, MMActivity!!),
-                    "$pkgSnsUI.SnsUploadSayFooter"
-            )
-        }
+        SnsUploadUI = findClassesFromPackage(loader, classes, pkgSnsUI)
+                .filterBySuper(MMActivity)
+                .filterByField("$pkgSnsUI.SnsUploadSayFooter")
+                .firstOrNull("SnsUploadUI")
+        SnsUploadUIEditTextField = findFieldsWithType(
+                SnsUploadUI, "$pkgSnsUI.SnsEditText"
+        ).firstOrNull()?.name ?: ""
         AdFrameLayout = findClassIfExists("$pkgSnsUI.AdFrameLayout", loader)
         SnsPostTextView = findClassIfExists("$pkgSnsUI.widget.SnsPostDescPreloadTextView", loader)
         SnsPhotosContent = findClassIfExists("$pkgSnsUI.PhotosContent", loader)
@@ -112,21 +115,26 @@ object WechatPackage {
         ).firstOrNull()?.name ?: ""
 
         val storageClasses = findClassesFromPackage(loader, classes, "com.tencent.mm.storage")
-        MsgInfoClass = findFirstClassWithMethod(storageClasses, C.Boolean, "isSystem")
-        ContactInfoClass = findFirstClassWithMethod(storageClasses, C.String, "getCityCode")
+        MsgInfoClass = storageClasses
+                .filterByMethod(C.Boolean, "isSystem")
+                .firstOrNull("MsgInfoClass")
+        ContactInfoClass = storageClasses
+                .filterByMethod(C.String, "getCityCode")
+                .filterByMethod(C.String, "getCountryCode")
+                .firstOrNull("ContactInfoClass")
         if (MsgInfoClass != null) {
-            MsgStorageClass = findFirstClassWithMethod(
-                    storageClasses, C.Long, MsgInfoClass!!, C.Boolean
-            )
+            MsgStorageClass = storageClasses
+                    .filterByMethod(C.Long, MsgInfoClass!!, C.Boolean)
+                    .firstOrNull("MsgStorageClass")
             MsgStorageInsertMethod = findMethodsByExactParameters(
                     MsgStorageClass, C.Long, MsgInfoClass!!, C.Boolean
             ).firstOrNull()?.name ?: ""
         }
 
         val platformClasses = findClassesFromPackage(loader, classes,"com.tencent.mm.sdk.platformtools")
-        XMLParserClass = findFirstClassWithMethod(
-                platformClasses, C.Map, C.String, C.String
-        )
+        XMLParserClass = platformClasses
+                .filterByMethod(C.Map, C.String, C.String)
+                .firstOrNull("XMLParserClass")
         XMLParseMethod = findMethodsByExactParameters(
                 XMLParserClass, C.Map, C.String, C.String
         ).firstOrNull()?.name ?: ""
@@ -138,5 +146,20 @@ object WechatPackage {
 //        ImgStorageCacheField = findFieldsWithGenericType(
 //                ImgStorageClass, "$CacheMapClass<java.lang.String, android.graphics.Bitmap>"
 //        ).firstOrNull()?.name ?: ""
+    }
+
+    // dumpFlag is used to ensure we only dump the package once.
+    private var dumpFlag = false
+
+    // dumpPackage dumps the content of WechatPackage to Xposed log.
+    fun dumpPackage() {
+        synchronized(dumpFlag) {
+            if (dumpFlag) return else dumpFlag = true
+        }
+        this.javaClass.declaredFields.filter {
+            it.name != "INSTANCE" && it.name != "dumpFlag"
+        }.forEach {
+            log("PKG => ${it.name} = ${it.get(this)}")
+        }
     }
 }

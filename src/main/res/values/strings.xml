@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="language">en</string>
     <string name="app_name">Wechat Magician</string>
     <string name="app_desc">Prevent Wechat from recalling chat messages or deleting moments.</string>
 
@@ -9,21 +8,16 @@
         Supported Features:\n
         \t1. Prevent friends from recalling messages.\n
         \t2. Prevent friends from deleting moments or comments.\n
-        \t3. Bypass the limit on number of recipients when retransmit messages.\n
-        \t4. Add a button "Select All" in "Select Contacts" interface.\n
-        \tSupport WeChat 6.5.13 and will keep updating.\n
+        \t3. Loose the limit on number of photos to send.\n
+        \t4. Bypass the limit on number of recipients when retransmitting messages.\n
+        \t5. Add a button "Select All" in "Select Contacts" interface.\n
+        \t6. Retweet other's moments (supports text, image and video moments).\n
+        \t7. Take screenshot of a single moment.\n
+        \tSupport WeChat 6.5.3 ~ 6.5.16 and will keep updating.\n
         \n
         Credits:\n
         \t@rovo89 for the awesome Xposed framework.\n
         \t@rarnu for the prototype module wechat_no_revoke.
     </string>
     <string name="view_about_project_github_url">https://github.com/Gh0u1L5/WechatMagician</string>
-
-    <string name="label_deleted">[Deleted]</string>
-    <string name="easter_egg">want to recall the message, idiot.</string>
-    <string name="button_select_all">Select All</string>
-    <string name="menu_sns_forward">Forward</string>
-    <string name="menu_sns_screenshot">Screenshot</string>
-    <string name="screenshot_prompt">"The screenshot has been saved to "</string>
-    <string name="wait_prompt">Please wait for a while.</string>
 </resources>

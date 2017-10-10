@@ -1,24 +1,26 @@
 # WechatMagician
 
-WechatMagician is a cool Xposed module designed for Chinese social media application Wechat, to help the users get the ultimate control of their messages and moments. This module implemented following features:
+WechatMagician is a fancy Xposed module designed for Chinese social media application Wechat, to help the users get the ultimate control of their messages and moments. Currently this module supports WeChat 6.5.3 ~ 6.5.16. It implemented following features:
 1. Prevent friends from recalling messages.
 2. Prevent friends from deleting moments or comments.
 3. Loose the limit on number of photos to send.
 4. Bypass the limit on number of recipients when retransmitting messages.
 5. Add a button "Select All" in "Select Contacts" interface.
-6. Retweet other's moments (only works for text moments or image moments).
+6. Retweet other's moments (supports text, image and video moments).
 7. Take screenshot of a single moment.
 
 __P.S. If you want to retweet or take screenshots, please long press the blank area under others' avatar.__
 
-Currently this module supports WeChat 6.5.3 ~ 6.5.16.
+## QQ Group / Wechat Group
+
+<img src="https://github.com/Gh0u1L5/WechatMagician/raw/master/image/qrcode_qq_group.jpg" width="40%" /> <img src="https://github.com/Gh0u1L5/WechatMagician/raw/master/image/qrcode_wechat_group.png" width="40%" />
 
 ## Design
 After learning from the failure of other Wechat modules, this project wants to do a better job in the following aspects:
 * __Stability__: Most of those modules crashes for every Wechat update due to the obfuscator used by Wechat.
   - This project wraps each feature into a small "unit"; a single unit can crash safely without ruining the whole module.
   - This project has [a set of APIs](https://github.com/Gh0u1L5/WechatMagician/blob/master/src/main/kotlin/com/gh0u1l5/wechatmagician/util/PackageUtil.kt) to analyze and match the signatures of critical classes / methods.
-  - This project picks only [the signatures](https://github.com/Gh0u1L5/WechatMagician/blob/master/src/main/kotlin/com/gh0u1l5/wechatmagician/xposed/WechatPackage.kt) that exist from Wechat 6.5.3 to 6.5.16. Even if a signature is broken in the coming Wechat updates, it can be fixed easily.
+  - This project picks only [the signatures](https://github.com/Gh0u1L5/WechatMagician/blob/master/src/main/kotlin/com/gh0u1l5/wechatmagician/backend/WechatPackage.kt) that exist from Wechat 6.5.3 to 6.5.16. Even if a signature is broken in the coming Wechat updates, it can be fixed easily.
   - This project hooks the methods close to system components / platform tools. This sacrifices some speed but ensures some stable break points.
 * __Simplicity__: Large modules like WeXposed have many functions that are hardly used by most of the users, but most of the crashes are caused by those functions.
   - If those functions are implemented by different modules, and the users can just install the modules as they need, then our lives would be much more easier.

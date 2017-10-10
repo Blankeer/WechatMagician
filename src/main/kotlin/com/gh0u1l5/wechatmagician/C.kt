@@ -1,4 +1,6 @@
-package com.gh0u1l5.wechatmagician.util
+@file:Suppress("unused")
+
+package com.gh0u1l5.wechatmagician
 
 // C.[class] is a shortcut for [class]::class.java
 object C {
@@ -19,6 +21,7 @@ object C {
     val Menu = android.view.Menu::class.java
     val MotionEvent = android.view.MotionEvent::class.java
     val View = android.view.View::class.java
+    val ViewOnLongClickListener = android.view.View.OnLongClickListener::class.java
 
     val ByteArray = ByteArray::class.java
     val ObjectArray = Array<Any>::class.java

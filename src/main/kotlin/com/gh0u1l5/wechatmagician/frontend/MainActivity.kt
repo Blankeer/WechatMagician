@@ -1,4 +1,4 @@
-package com.gh0u1l5.wechatmagician
+package com.gh0u1l5.wechatmagician.frontend
 
 import android.app.Activity
 import android.content.Intent
@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
+import com.gh0u1l5.wechatmagician.R
 
 class MainActivity : Activity(), View.OnClickListener {
 
